@@ -73,14 +73,14 @@ jobs:
         if: startsWith(matrix.build, 'linux-') || startsWith(matrix.build, 'mac-')
         run: |
           mkdir ${{ steps.info.outputs.asset_dir }}
-          cp target/${{ matrix.target }}/release/anew LICENSE.txt README.md ${{ steps.info.outputs.asset_dir }}
+          cp target/${{ matrix.target }}/release/anew LICENSE README.md ${{ steps.info.outputs.asset_dir }}
           zip ${{ steps.info.outputs.zip }} -r ${{ steps.info.outputs.asset_dir }}
       - name: Archive files
         if: matrix.build == 'win'
         shell: bash
         run: |
           mkdir ${{ steps.info.outputs.asset_dir }}
-          cp target/${{ matrix.target }}/release/anew.exe LICENSE.txt README.md ${{ steps.info.outputs.asset_dir }}
+          cp target/${{ matrix.target }}/release/anew.exe LICENSE README.md ${{ steps.info.outputs.asset_dir }}
           7z a ${{ steps.info.outputs.zip }} ${{ steps.info.outputs.asset_dir }}
       - name: Upload release artifact
         uses: softprops/action-gh-release@v1
@@ -126,7 +126,7 @@ jobs:
       - name: Archive files
         run: |
           mkdir ${{ steps.info.outputs.asset_dir }}
-          cp target/x86_64-unknown-linux-musl/release/anew LICENSE.txt README.md ${{ steps.info.outputs.asset_dir }}
+          cp target/x86_64-unknown-linux-musl/release/anew LICENSE README.md ${{ steps.info.outputs.asset_dir }}
           zip ${{ steps.info.outputs.zip }} -r ${{ steps.info.outputs.asset_dir }}
       - name: Upload release artifact
         uses: softprops/action-gh-release@v1
