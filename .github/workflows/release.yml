@@ -1,0 +1,144 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]'
+  # Currently only dry-run is supported
+  workflow_dispatch:
+
+jobs:
+  upload:
+    name: Upload release binary
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [linux-x86_64, linux-aarch64, mac-x86_64, mac-aarch64, win]
+        include:
+          - build: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - build: linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - build: mac-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+          - build: mac-aarch64
+            os: macos-11
+            target: aarch64-apple-darwin
+          - build: win
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+    steps:
+      - name: Collect build information
+        id: info
+        # $GITHUB_REF will have a value like "refs/tags/0.3.1". Extract "0.3.1" from it
+        run: |
+          if ${{ github.event_name == 'workflow_dispatch' }}; then
+            ver="v0.0.0"
+          else
+            ver="${GITHUB_REF##refs/tags/}"
+          fi
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          echo "asset_dir=anew-${ver}-${TARGET}" >> "$GITHUB_OUTPUT"
+          echo "zip=anew-${ver}-${TARGET}.zip" >> "$GITHUB_OUTPUT"
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Prepare cross compilation for M1 Mac
+        run: |
+          # /usr/local/lib/libpcre2-8.dylib is built for x86_64. Link error happens on `cargo build` for dynamic linking.
+          # Build pcre2-sys with static link to avoid the problem.
+          # https://github.com/BurntSushi/rust-pcre2/tree/master/pcre2-sys
+          echo 'PCRE2_SYS_STATIC=1' >> "$GITHUB_ENV"
+        if: matrix.build == 'mac-aarch64'
+      - name: Prepare cross compilation for AArch64 Linux
+        run: |
+          sudo apt-get install gcc-aarch64-linux-gnu
+        if: matrix.build == 'linux-aarch64'
+      - name: Build
+        run: cargo build --release --color always --target=${{ matrix.target }} --verbose
+        env:
+          PKG_CONFIG_ALLOW_CROSS: 1
+          RUST_BACKTRACE: 1
+          PCRE2_SYS_STATIC: 1
+      - name: Archive files
+        if: startsWith(matrix.build, 'linux-') || startsWith(matrix.build, 'mac-')
+        run: |
+          mkdir ${{ steps.info.outputs.asset_dir }}
+          cp target/${{ matrix.target }}/release/anew LICENSE.txt README.md ${{ steps.info.outputs.asset_dir }}
+          zip ${{ steps.info.outputs.zip }} -r ${{ steps.info.outputs.asset_dir }}
+      - name: Archive files
+        if: matrix.build == 'win'
+        shell: bash
+        run: |
+          mkdir ${{ steps.info.outputs.asset_dir }}
+          cp target/${{ matrix.target }}/release/anew.exe LICENSE.txt README.md ${{ steps.info.outputs.asset_dir }}
+          7z a ${{ steps.info.outputs.zip }} ${{ steps.info.outputs.asset_dir }}
+      - name: Upload release artifact
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.info.outputs.version }}
+          draft: false
+          prerelease: false
+          files: ${{ steps.info.outputs.zip }}
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+      - name: Upload release artifact for dry-run
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ steps.info.outputs.asset_dir }}
+          path: ${{ steps.info.outputs.asset_dir }}
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+  upload-musl:
+    name: Upload release binary (linux-musl)
+    runs-on: ubuntu-latest
+    container:
+      image: rust:alpine
+      volumes:
+        - /usr/local/cargo/registry
+    steps:
+      - name: Collect build information
+        id: info
+        # $GITHUB_REF will have a value like "refs/tags/0.3.1". Extract "0.3.1" from it
+        run: |
+          if ${{ github.event_name == 'workflow_dispatch' }}; then
+            ver="v0.0.0"
+          else
+            ver="${GITHUB_REF##refs/tags/}"
+          fi
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          echo "asset_dir=anew-${ver}-x86_64-unknown-linux-musl" >> "$GITHUB_OUTPUT"
+          echo "zip=anew-${ver}-x86_64-unknown-linux-musl.zip" >> "$GITHUB_OUTPUT"
+      - name: Install dependencies
+        run: |
+          apk add --no-cache clang lld musl-dev zip
+          clang --version
+          zip --version
+      - uses: actions/checkout@v3
+      - run: cargo build --release --color always --target=x86_64-unknown-linux-musl
+      - name: Archive files
+        run: |
+          mkdir ${{ steps.info.outputs.asset_dir }}
+          cp target/x86_64-unknown-linux-musl/release/anew LICENSE.txt README.md ${{ steps.info.outputs.asset_dir }}
+          zip ${{ steps.info.outputs.zip }} -r ${{ steps.info.outputs.asset_dir }}
+      - name: Upload release artifact
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.info.outputs.version }}
+          draft: false
+          prerelease: false
+          files: ${{ steps.info.outputs.zip }}
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+      - name: Upload release artifact for dry-run
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ steps.info.outputs.asset_dir }}
+          path: ${{ steps.info.outputs.asset_dir }}
+        if: ${{ github.event_name == 'workflow_dispatch' }}
