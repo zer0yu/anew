@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, Write};
-use std::{fs, str};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::str;
 
 use clap::Parser;
 use indexmap::IndexSet;
@@ -10,54 +10,57 @@ mod utils;
 #[derive(Parser, Debug)]
 #[command(author = "zer0yu", version, about = "A tool for adding new lines to files, skipping duplicates", long_about = None)]
 struct Options {
-    #[arg(short, long, help = "do not output new lines to stdout")]
+    #[arg(short, long, help = "Do not output new lines to stdout")]
     quiet_mode: bool,
 
-    #[arg(short, long, help = "sort lines (natsort)")]
+    #[arg(short, long, help = "Sort lines (natsort)")]
     sort: bool,
 
-    #[arg(short, long, help = "trim whitespaces")]
+    #[arg(short, long, help = "Trim whitespaces")]
     trim: bool,
 
     #[arg(
         short,
         long,
-        help = "rewrite existing destination file to remove duplicates"
+        help = "Rewrite existing destination file to remove duplicates"
     )]
     rewrite: bool,
 
-    #[arg(long, help = "do not write to file, only output what would be written")]
+    #[arg(
+        short,
+        long,
+        help = "Do not write to file, only output what would be written"
+    )]
     dry_run: bool,
 
-    #[arg(help = "destination file")]
+    #[arg(help = "Destination file")]
     filepath: String,
 }
 
 fn main() -> io::Result<()> {
     let args = Options::parse();
-    let filepath = &args.filepath;
+    let mut lines = load_file(&args)?;
 
-    let mut file = OpenOptions::new()
-        .append(true)
-        .write(true)
-        .create(true)
-        .open(filepath)?;
+    if args.rewrite && !args.dry_run {
+        let file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&args.filepath)?;
+        let mut writer = BufWriter::new(file);
 
-    let mut lines = match load_file(&args) {
-        Ok(value) => value,
-        Err(err) => {
-            eprintln!("failed to load file: {}", err);
-            return Err(err);
-        }
-    };
-
-    if !args.dry_run && args.rewrite {
         for line in lines.iter() {
-            writeln!(file, "{}", line)?;
+            writeln!(writer, "{}", line)?;
         }
     }
 
     let stdin = io::stdin();
+    let file = OpenOptions::new()
+        .append(true)
+        .write(true)
+        .create(true)
+        .open(&args.filepath)?;
+    let mut writer = BufWriter::new(file);
+
     for stdin_line in stdin.lock().lines() {
         let stdin_line = stdin_line?;
 
@@ -68,38 +71,24 @@ fn main() -> io::Result<()> {
                 println!("{}", stdin_line);
             }
 
-            if !args.dry_run {
-                // 懒加载文件
-                let mut f: Option<File> = None;
-                if f.is_none() {
-                    f = Some(
-                        OpenOptions::new()
-                            .append(true)
-                            .write(true)
-                            .create(true)
-                            .open(filepath)
-                            .expect("failed to open file"),
-                    );
-                }
-
-                if let Some(mut file) = f {
-                    writeln!(file, "{}", stdin_line)?;
-                }
+            if !args.sort && !args.dry_run {
+                writeln!(writer, "{}", stdin_line)?;
             }
         }
     }
 
     if args.sort && !args.dry_run {
-        let mut f = OpenOptions::new()
-            .append(false)
+        let mut sorted_lines: Vec<_> = lines.into_iter().collect();
+        sorted_lines.sort_by(|a, b| utils::natsort::compare(a, b, false));
+
+        let soet_file = OpenOptions::new()
             .write(true)
-            .create(false)
+            .truncate(true)
             .open(&args.filepath)?;
+        let mut soet_writer = BufWriter::new(soet_file);
 
-        lines.sort_by(|a, b| utils::natsort::compare(a, b, false));
-
-        for line in lines.iter() {
-            writeln!(f, "{}", line)?;
+        for line in sorted_lines.iter() {
+            writeln!(soet_writer, "{}", line)?;
         }
     }
 
@@ -107,20 +96,15 @@ fn main() -> io::Result<()> {
 }
 
 fn load_file(args: &Options) -> Result<IndexSet<String>, io::Error> {
+    let file = File::open(&args.filepath)?;
+    let reader = BufReader::new(file);
     let mut lines = IndexSet::new();
-    match fs::read_to_string(&args.filepath) {
-        Ok(data) => {
-            for line in data.lines() {
-                if should_add_line(args, &lines, &line) {
-                    lines.insert(line.to_string());
-                }
-            }
+
+    for line in reader.lines() {
+        let line = line?;
+        if should_add_line(args, &lines, &line) {
+            lines.insert(line);
         }
-        Err(err) if err.kind() != io::ErrorKind::NotFound => {
-            eprintln!("failed to open file for reading: {}", err);
-            return Err(err);
-        }
-        _ => {}
     }
 
     Ok(lines)

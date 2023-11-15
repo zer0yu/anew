@@ -2,7 +2,7 @@
 name = "anew"
 version = "0.1.0"
 authors = ["z3r0yu <zeroyu@protonmail.com>"]
-edition = "2023"
+edition = "2021"
 license = "MIT"
 homepage = "https://github.com/zer0yu/anew"
 repository = "https://github.com/zer0yu/anew"
