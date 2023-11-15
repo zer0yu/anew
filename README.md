@@ -6,6 +6,11 @@ Outputs new lines to `stdout` too, making it a bit like a `tee -a` that removes 
 
 ## Install
 
+Via cargo install
+```
+cargo install anew
+```
+
 Manual installation
 ```
 git clone https://github.com/zer0yu/anew
