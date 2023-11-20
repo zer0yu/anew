@@ -7,135 +7,129 @@ on:
   workflow_dispatch:
 
 jobs:
-  upload:
-    name: Upload release binary
+  build-nix:
+    env:
+      IN_PIPELINE: true
+    runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
-        build: [linux-x86_64, mac-x86_64, mac-aarch64, win]
+        type: [ubuntu-x64, ubuntu-x86, armv7, aarch64]
         include:
-          - build: linux-x86_64
+          - type: ubuntu-x64
             os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - build: mac-x86_64
-            os: macos-latest
-            target: x86_64-apple-darwin
-          - build: mac-aarch64
-            os: macos-11
-            target: aarch64-apple-darwin
-          - build: win
+            target: x86_64-unknown-linux-musl
+            name: anew-linux
+            path: target/x86_64-unknown-linux-musl/release/anew
+            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
+          - type: ubuntu-x86
+            os: ubuntu-latest
+            target: i686-unknown-linux-musl
+            name: anew-linux-i386
+            path: target/i686-unknown-linux-musl/release/anew
+            pkg_config_path: /usr/lib/i686-linux-gnu/pkgconfig
+          - type: armv7
+            os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            name: anew-armv7
+            path: target/armv7-unknown-linux-gnueabihf/release/anew
+            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
+          - type: aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            name: anew-aarch64
+            path: target/aarch64-unknown-linux-gnu/release/anew
+            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install System Dependencies
+        run: |
+          env
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libssl-dev pkg-config gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      - uses: actions-rs/cargo@v1
+        env:
+          PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
+          OPENSSL_DIR: /usr/lib/ssl
+        with:
+          use-cross: true
+          command: build
+          args: --release --target=${{ matrix.target }}
+      - name: Strip symbols from binary
+        run: |
+          strip -s ${{ matrix.path }} || arm-linux-gnueabihf-strip -s ${{ matrix.path }} || aarch64-linux-gnu-strip -s ${{ matrix.path }}
+      - uses: actions/upload-artifact@v2
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.path }}
+
+  build-macos:
+    strategy:
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+        include:
+          - target: x86_64-apple-darwin
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            arch: arm64
+    env:
+      IN_PIPELINE: true
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --release --target=${{ matrix.target }}
+      - name: Strip symbols from binary
+        run: |
+          strip -u -r target/${{ matrix.target }}/release/anew
+      - uses: actions/upload-artifact@v2
+        with:
+          name: anew-osx-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/anew
+
+  build-windows:
+    env:
+      IN_PIPELINE: true
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        type: [windows-x64, windows-x86]
+        include:
+          - type: windows-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
-    outputs:
-      version: ${{ steps.info.outputs.version }}
+            name: anew-windows.exe
+            path: target\x86_64-pc-windows-msvc\release\anew.exe
+          - type: windows-x86
+            os: windows-latest
+            target: i686-pc-windows-msvc
+            name: anew-windows-i686.exe
+            path: target\i686-pc-windows-msvc\release\anew.exe
     steps:
-      - name: Collect build information
-        id: info
-        # $GITHUB_REF will have a value like "refs/tags/0.3.1". Extract "0.3.1" from it
-        run: |
-          if ${{ github.event_name == 'workflow_dispatch' }}; then
-            ver="v0.0.0"
-          else
-            ver="${GITHUB_REF##refs/tags/}"
-          fi
-          echo "version=${ver}" >> "$GITHUB_OUTPUT"
-          echo "asset_dir=anew-${ver}-${TARGET}" >> "$GITHUB_OUTPUT"
-          echo "zip=anew-${ver}-${TARGET}.zip" >> "$GITHUB_OUTPUT"
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
         with:
-          targets: ${{ matrix.target }}
-      - name: Prepare cross compilation for M1 Mac
-        run: |
-          # /usr/local/lib/libpcre2-8.dylib is built for x86_64. Link error happens on `cargo build` for dynamic linking.
-          # Build pcre2-sys with static link to avoid the problem.
-          # https://github.com/BurntSushi/rust-pcre2/tree/master/pcre2-sys
-          echo 'PCRE2_SYS_STATIC=1' >> "$GITHUB_ENV"
-        if: matrix.build == 'mac-aarch64'
-      - name: Prepare cross compilation for AArch64 Linux
-        run: |
-          sudo apt-get install gcc-aarch64-linux-gnu
-        if: matrix.build == 'linux-aarch64'
-      - name: Build
-        run: cargo build --release --color always --target=${{ matrix.target }} --verbose
-        env:
-          PKG_CONFIG_ALLOW_CROSS: 1
-          RUST_BACKTRACE: 1
-          PCRE2_SYS_STATIC: 1
-      - name: Archive files
-        if: startsWith(matrix.build, 'linux-') || startsWith(matrix.build, 'mac-')
-        run: |
-          mkdir ${{ steps.info.outputs.asset_dir }}
-          cp target/${{ matrix.target }}/release/anew LICENSE README.md ${{ steps.info.outputs.asset_dir }}
-          zip ${{ steps.info.outputs.zip }} -r ${{ steps.info.outputs.asset_dir }}
-      - name: Archive files
-        if: matrix.build == 'win'
-        shell: bash
-        run: |
-          mkdir ${{ steps.info.outputs.asset_dir }}
-          cp target/${{ matrix.target }}/release/anew.exe LICENSE README.md ${{ steps.info.outputs.asset_dir }}
-          7z a ${{ steps.info.outputs.zip }} ${{ steps.info.outputs.asset_dir }}
-      - name: Upload release artifact
-        uses: softprops/action-gh-release@v1
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      - uses: actions-rs/cargo@v1
         with:
-          tag_name: ${{ steps.info.outputs.version }}
-          draft: false
-          prerelease: false
-          files: ${{ steps.info.outputs.zip }}
-        if: ${{ github.event_name != 'workflow_dispatch' }}
-      - name: Upload release artifact for dry-run
-        uses: actions/upload-artifact@v3
+          use-cross: true
+          command: build
+          args: --release --target=${{ matrix.target }}
+      - uses: actions/upload-artifact@v2
         with:
-          name: ${{ steps.info.outputs.asset_dir }}
-          path: ${{ steps.info.outputs.asset_dir }}
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-  upload-musl:
-    name: Upload release binary (linux-musl)
-    runs-on: ubuntu-latest
-    container:
-      image: rust:alpine
-      volumes:
-        - /usr/local/cargo/registry
-    steps:
-      - name: Collect build information
-        id: info
-        # $GITHUB_REF will have a value like "refs/tags/0.3.1". Extract "0.3.1" from it
-        run: |
-          if ${{ github.event_name == 'workflow_dispatch' }}; then
-            ver="v0.0.0"
-          else
-            ver="${GITHUB_REF##refs/tags/}"
-          fi
-          echo "version=${ver}" >> "$GITHUB_OUTPUT"
-          echo "asset_dir=anew-${ver}-x86_64-unknown-linux-musl" >> "$GITHUB_OUTPUT"
-          echo "zip=anew-${ver}-x86_64-unknown-linux-musl.zip" >> "$GITHUB_OUTPUT"
-      - name: Install dependencies
-        run: |
-          apk add --no-cache clang lld musl-dev zip
-          clang --version
-          zip --version
-      - uses: actions/checkout@v3
-      - run: cargo build --release --color always --target=x86_64-unknown-linux-musl
-      - name: Archive files
-        run: |
-          mkdir ${{ steps.info.outputs.asset_dir }}
-          cp target/x86_64-unknown-linux-musl/release/anew LICENSE README.md ${{ steps.info.outputs.asset_dir }}
-          zip ${{ steps.info.outputs.zip }} -r ${{ steps.info.outputs.asset_dir }}
-      - name: Upload release artifact
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.info.outputs.version }}
-          draft: false
-          prerelease: false
-          files: ${{ steps.info.outputs.zip }}
-        if: ${{ github.event_name != 'workflow_dispatch' }}
-      - name: Upload release artifact for dry-run
-        uses: actions/upload-artifact@v3
-        with:
-          name: ${{ steps.info.outputs.asset_dir }}
-          path: ${{ steps.info.outputs.asset_dir }}
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+          name: ${{ matrix.name }}
+          path: ${{ matrix.path }}
