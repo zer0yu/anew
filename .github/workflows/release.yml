@@ -6,130 +6,145 @@ on:
   # Currently only dry-run is supported
   workflow_dispatch:
 
-jobs:
-  build-nix:
-    env:
-      IN_PIPELINE: true
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        type: [ubuntu-x64, ubuntu-x86, armv7, aarch64]
-        include:
-          - type: ubuntu-x64
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            name: anew-linux
-            path: target/x86_64-unknown-linux-musl/release/anew
-            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
-          - type: ubuntu-x86
-            os: ubuntu-latest
-            target: i686-unknown-linux-musl
-            name: anew-linux-i386
-            path: target/i686-unknown-linux-musl/release/anew
-            pkg_config_path: /usr/lib/i686-linux-gnu/pkgconfig
-          - type: armv7
-            os: ubuntu-latest
-            target: armv7-unknown-linux-gnueabihf
-            name: anew-armv7
-            path: target/armv7-unknown-linux-gnueabihf/release/anew
-            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
-          - type: aarch64
-            os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            name: anew-aarch64
-            path: target/aarch64-unknown-linux-gnu/release/anew
-            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install System Dependencies
-        run: |
-          env
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev pkg-config gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-      - uses: actions-rs/cargo@v1
-        env:
-          PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
-          OPENSSL_DIR: /usr/lib/ssl
-        with:
-          use-cross: true
-          command: build
-          args: --release --target=${{ matrix.target }}
-      - name: Strip symbols from binary
-        run: |
-          strip -s ${{ matrix.path }} || arm-linux-gnueabihf-strip -s ${{ matrix.path }} || aarch64-linux-gnu-strip -s ${{ matrix.path }}
-      - uses: actions/upload-artifact@v2
-        with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.path }}
+env:
+  CARGO_TERM_COLOR: always
 
-  build-macos:
-    strategy:
-      matrix:
-        target: [x86_64-apple-darwin, aarch64-apple-darwin]
-        include:
-          - target: x86_64-apple-darwin
-            arch: x86_64
-          - target: aarch64-apple-darwin
-            arch: arm64
+jobs:
+  build-cross:
+    runs-on: ubuntu-latest
     env:
-      IN_PIPELINE: true
-    runs-on: macos-latest
+      RUST_BACKTRACE: full
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - i686-unknown-linux-musl
+          - x86_64-pc-windows-gnu
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - armv7-unknown-linux-musleabihf
+          - armv7-unknown-linux-gnueabihf
+          - arm-unknown-linux-gnueabi
+          - arm-unknown-linux-gnueabihf
+          - arm-unknown-linux-musleabi
+          - arm-unknown-linux-musleabihf
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
+          - mips-unknown-linux-musl
+          - mips-unknown-linux-gnu
+          - mipsel-unknown-linux-musl
+
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --release --target=${{ matrix.target }}
-      - name: Strip symbols from binary
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
         run: |
-          strip -u -r target/${{ matrix.target }}/release/anew
-      - uses: actions/upload-artifact@v2
+          rustup set profile minimal
+          rustup toolchain install stable
+          rustup default stable
+          rustup override set stable
+          rustup target add --toolchain stable ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross
+
+      - name: Build ${{ matrix.target }}
+        timeout-minutes: 120
+        run: |
+          compile_target=${{ matrix.target }}
+
+          if [[ "$compile_target" == *"-linux-"* || "$compile_target" == *"-apple-"* ]]; then
+            compile_features="-f local-redir -f local-tun"
+          fi
+
+          if [[ "$compile_target" == "mips-"* || "$compile_target" == "mipsel-"* || "$compile_target" == "mips64-"* || "$compile_target" == "mips64el-"* ]]; then
+            sudo apt-get update -y && sudo apt-get install -y upx;
+            if [[ "$?" == "0" ]]; then
+              compile_compress="-u"
+            fi
+          fi
+
+          cd build
+          ./build-release -t ${{ matrix.target }} $compile_features $compile_compress
+
+      - name: Upload Github Assets
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: anew-osx-${{ matrix.arch }}
-          path: target/${{ matrix.target }}/release/anew
+          files: build/release/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
+
+  build-unix:
+    runs-on: ${{ matrix.os }}
+    env:
+      BUILD_EXTRA_FEATURES: "local-redir local-tun"
+      RUST_BACKTRACE: full
+    strategy:
+      fail-fast: false
+      matrix:
+        # os: [ubuntu-latest, macos-latest]
+        os: [macos-latest]
+        target:
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install GNU tar
+        if: runner.os == 'macOS'
+        run: |
+          brew install gnu-tar
+          # echo "::add-path::/usr/local/opt/gnu-tar/libexec/gnubin"
+          echo "/usr/local/opt/gnu-tar/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: Install Rust
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable
+          rustup default stable
+          rustup override set stable
+          rustup target add --toolchain stable ${{ matrix.target }}
+
+      - name: Build release
+        shell: bash
+        run: |
+          ./build/build-host-release -t ${{ matrix.target }}
+
+      - name: Upload Github Assets
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: build/release/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
 
   build-windows:
+    runs-on: windows-latest
     env:
-      IN_PIPELINE: true
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        type: [windows-x64, windows-x86]
-        include:
-          - type: windows-x64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            name: anew-windows.exe
-            path: target\x86_64-pc-windows-msvc\release\anew.exe
-          - type: windows-x86
-            os: windows-latest
-            target: i686-pc-windows-msvc
-            name: anew-windows-i686.exe
-            path: target\i686-pc-windows-msvc\release\anew.exe
+      RUSTFLAGS: "-C target-feature=+crt-static"
+      RUST_BACKTRACE: full
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable
+          rustup default stable
+          rustup override set stable
+
+      - name: Build release
+        run: |
+          pwsh ./build/build-host-release.ps1
+
+      - name: Upload Github Assets
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --release --target=${{ matrix.target }}
-      - uses: actions/upload-artifact@v2
-        with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.path }}
+          files: build/release/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
