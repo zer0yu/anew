@@ -133,3 +133,28 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.path }}
+  create-release:
+    # 确保这个任务在所有构建任务完成后执行
+    needs: [build-nix, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    # 这个任务只在标签推送时执行
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v2
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**
+          # 这将自动使用推送的 Git 标签作为 Release 名称
+          tag_name: ${{ github.ref }}
+          # 这里可以添加更多的配置，比如 release 名称、body 等
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
