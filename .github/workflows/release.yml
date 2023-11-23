@@ -152,7 +152,15 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**
+          files: |
+            artifacts/anew-aarch64
+            artifacts/anew-armv7
+            artifacts/anew-linux
+            artifacts/anew-linux-i386
+            artifacts/anew-osx-arm64
+            artifacts/anew-osx-x86_64
+            artifacts/anew-windows.exe
+            artifacts/anew-windows-i686.exe
           # 这将自动使用推送的 Git 标签作为 Release 名称
           tag_name: ${{ github.ref }}
           # 这里可以添加更多的配置，比如 release 名称、body 等
