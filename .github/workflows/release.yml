@@ -157,7 +157,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/*
-          tag_name: ${{ github.ref }}
+            ${{ github.workspace }}/artifacts/*
+          tag_name: ${{ github.ref == 'refs/tags/' && github.ref || 'heads/' && github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
