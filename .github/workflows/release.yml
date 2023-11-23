@@ -149,19 +149,15 @@ jobs:
         with:
           path: artifacts
 
+      - name: List Files
+        run: |
+          ls artifacts
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          path: artifacts
           files: |
-            anew-aarch64
-            anew-armv7
-            anew-linux
-            anew-linux-i386
-            anew-osx-arm64
-            anew-osx-x86_64
-            anew-windows.exe
-            anew-windows-i686.exe
+            artifacts/*
           tag_name: ${{ github.ref }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
