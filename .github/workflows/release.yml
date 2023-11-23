@@ -6,158 +6,75 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build-nix:
-    env:
-      IN_PIPELINE: true
+  build-and-upload:
+    name: Build and upload
     runs-on: ${{ matrix.os }}
+
     strategy:
       matrix:
-        type: [ubuntu-x64, ubuntu-x86, armv7, aarch64]
+        # You can add more, for any target you'd like!
         include:
-          - type: ubuntu-x64
+          - build: linux
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            name: anew-linux
-            path: target/x86_64-unknown-linux-musl/release/anew
-            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
-          - type: ubuntu-x86
-            os: ubuntu-latest
-            target: i686-unknown-linux-musl
-            name: anew-linux-i386
-            path: target/i686-unknown-linux-musl/release/anew
-            pkg_config_path: /usr/lib/i686-linux-gnu/pkgconfig
-          - type: armv7
-            os: ubuntu-latest
-            target: armv7-unknown-linux-gnueabihf
-            name: anew-armv7
-            path: target/armv7-unknown-linux-gnueabihf/release/anew
-            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
-          - type: aarch64
-            os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            name: anew-aarch64
-            path: target/aarch64-unknown-linux-gnu/release/anew
-            pkg_config_path: /usr/lib/x86_64-linux-gnu/pkgconfig
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install System Dependencies
-        run: |
-          env
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev pkg-config gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-      - uses: actions-rs/cargo@v1
-        env:
-          PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
-          OPENSSL_DIR: /usr/lib/ssl
-        with:
-          use-cross: true
-          command: build
-          args: --release --target=${{ matrix.target }}
-      - name: Strip symbols from binary
-        run: |
-          strip -s ${{ matrix.path }} || arm-linux-gnueabihf-strip -s ${{ matrix.path }} || aarch64-linux-gnu-strip -s ${{ matrix.path }}
-      - uses: actions/upload-artifact@v2
-        with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.path }}
-
-  build-macos:
-    strategy:
-      matrix:
-        target: [x86_64-apple-darwin, aarch64-apple-darwin]
-        include:
-          - target: x86_64-apple-darwin
-            arch: x86_64
-          - target: aarch64-apple-darwin
-            arch: arm64
-    env:
-      IN_PIPELINE: true
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --release --target=${{ matrix.target }}
-      - name: Strip symbols from binary
-        run: |
-          strip -u -r target/${{ matrix.target }}/release/anew
-      - uses: actions/upload-artifact@v2
-        with:
-          name: anew-osx-${{ matrix.arch }}
-          path: target/${{ matrix.target }}/release/anew
-
-  build-windows:
-    env:
-      IN_PIPELINE: true
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        type: [windows-x64, windows-x86]
-        include:
-          - type: windows-x64
+          - build: macos
+            os: macos-latest
+            target: x86_64-apple-darwin
+          - build: windows
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            name: anew-windows.exe
-            path: target\x86_64-pc-windows-msvc\release\anew.exe
-          - type: windows-x86
-            os: windows-latest
-            target: i686-pc-windows-msvc
-            name: anew-windows-i686.exe
-            path: target\i686-pc-windows-msvc\release\anew.exe
+
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Get the release version from the tag
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Install Rust
+        # Or @nightly if you want
+        uses: dtolnay/rust-toolchain@stable
+        # Arguments to pass in
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-      - uses: actions-rs/cargo@v1
+          # Make Rust compile to our target (defined in the matrix)
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        uses: actions-rs/cargo@v1
         with:
           use-cross: true
           command: build
-          args: --release --target=${{ matrix.target }}
-      - uses: actions/upload-artifact@v2
-        with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.path }}
-  create-release:
-    # 确保这个任务在所有构建任务完成后执行
-    needs: [build-nix, build-macos, build-windows]
-    runs-on: ubuntu-latest
-    # 这个任务只在标签推送时执行
-    if: startsWith(github.ref, 'refs/tags/')
+          args: --verbose --release --target ${{ matrix.target }}
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v2
-        with:
-          path: artifacts
-
-      - name: List Files
+      - name: Build archive
+        shell: bash
         run: |
-          ls artifacts
+          # Replace with the name of your binary
+          binary_name="anew"
 
-      - name: Create Release
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          mkdir "$dirname"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            mv "target/${{ matrix.target }}/release/$binary_name.exe" "$dirname"
+          else
+            mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          fi
+
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a "$dirname.zip" "$dirname"
+            echo "ASSET=$dirname.zip" >> $GITHUB_ENV
+          else
+            tar -czf "$dirname.tar.gz" "$dirname"
+            echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          fi
+
+      - name: Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            ${{ github.workspace }}/artifacts/*
-          tag_name: ${{ github.ref == 'refs/tags/' && github.ref || 'heads/' && github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            ${{ env.ASSET }}
