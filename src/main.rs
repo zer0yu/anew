@@ -1,5 +1,6 @@
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::path::Path;
 use std::str;
 
 use clap::Parser;
@@ -39,11 +40,18 @@ struct Options {
 
 fn main() -> io::Result<()> {
     let args = Options::parse();
+
+    // Ensure the directories in the filepath exist before attempting to open the file
+    if let Some(parent) = Path::new(&args.filepath).parent() {
+        fs::create_dir_all(parent)?;
+    }
+
     let mut lines = load_file(&args)?;
 
     if args.rewrite && !args.dry_run {
         let file = OpenOptions::new()
             .write(true)
+            .create(true)
             .truncate(true)
             .open(&args.filepath)?;
         let mut writer = BufWriter::new(file);
@@ -83,6 +91,7 @@ fn main() -> io::Result<()> {
 
         let soet_file = OpenOptions::new()
             .write(true)
+            .create(true)
             .truncate(true)
             .open(&args.filepath)?;
         let mut soet_writer = BufWriter::new(soet_file);
@@ -96,18 +105,22 @@ fn main() -> io::Result<()> {
 }
 
 fn load_file(args: &Options) -> Result<IndexSet<String>, io::Error> {
-    let file = File::open(&args.filepath)?;
-    let reader = BufReader::new(file);
-    let mut lines = IndexSet::new();
+    match File::open(&args.filepath) {
+        Ok(file) => {
+            let reader = BufReader::new(file);
+            let mut lines = IndexSet::new();
 
-    for line in reader.lines() {
-        let line = line?;
-        if should_add_line(args, &lines, &line) {
-            lines.insert(line);
+            for line in reader.lines() {
+                let line = line?;
+                if should_add_line(args, &lines, &line) {
+                    lines.insert(line);
+                }
+            }
+
+            Ok(lines)
         }
+        Err(_) => Ok(IndexSet::new()), // If the file does not exist, return an empty set of lines
     }
-
-    Ok(lines)
 }
 
 fn should_add_line(args: &Options, lines: &IndexSet<String>, line: &str) -> bool {
