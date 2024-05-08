@@ -5,8 +5,7 @@ use std::str;
 
 use clap::Parser;
 use indexmap::IndexSet;
-
-mod utils;
+use anew::natsort;
 
 #[derive(Parser, Debug)]
 #[command(author = "zer0yu", version, about = "A tool for adding new lines to files, skipping duplicates", long_about = None)]
@@ -87,7 +86,7 @@ fn main() -> io::Result<()> {
 
     if args.sort && !args.dry_run {
         let mut sorted_lines: Vec<_> = lines.into_iter().collect();
-        sorted_lines.sort_by(|a, b| utils::natsort::compare(a, b, false));
+        sorted_lines.sort_by(|a, b| natsort::compare(a, b, false));
 
         let soet_file = OpenOptions::new()
             .write(true)
