@@ -113,6 +113,33 @@ Five
 Four
 ```
 
+Usage 5: Merge multiple files and remove duplicates (like `sort -u`)
+```
+❯ cat things.txt
+One
+Zero
+Two
+
+❯ cat newthings.txt
+Three
+One
+Five
+
+❯ cat morethings.txt
+Four
+One
+Two
+
+❯ cat *.txt | anew -u 
+Five
+Four
+One
+Three
+Two
+Zero
+```
+Note: The `-u` option automatically sorts the output and removes duplicates from all input files.
+
 ## Efficiency Comparison
 
 We use two files `newoutput.txt` and `output.txt` of size 10MB as input to the program to compare the difference in speed between tomnomnom's Go implementation, rwese's Rust implementation, and this project's Rust implementation.

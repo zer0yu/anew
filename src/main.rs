@@ -33,15 +33,81 @@ struct Options {
     )]
     dry_run: bool,
 
-    #[arg(help = "Destination file")]
-    filepath: String,
+    #[arg(
+        short = 'u',
+        long = "unique",
+        help = "Merge all input files, sort and remove duplicates (like 'sort -u')"
+    )]
+    unique_mode: bool,
+
+    #[arg(help = "Destination file", required_unless_present = "unique_mode")]
+    filepath: Option<String>,
+
+    #[arg(help = "Additional input files for unique mode", num_args = 0..)]
+    additional_files: Vec<String>,
 }
 
 fn main() -> io::Result<()> {
     let args = Options::parse();
 
+    if args.unique_mode {
+        // Handle unique mode (sort -u equivalent)
+        let mut all_lines = IndexSet::new();
+        
+        // Process files if provided
+        if let Some(filepath) = &args.filepath {
+            if let Ok(lines) = load_file_content(filepath) {
+                for line in lines {
+                    if should_add_line(&args, &all_lines, &line) {
+                        all_lines.insert(line);
+                    }
+                }
+            }
+        }
+
+        // Process additional files
+        for file in &args.additional_files {
+            if let Ok(lines) = load_file_content(file) {
+                for line in lines {
+                    if should_add_line(&args, &all_lines, &line) {
+                        all_lines.insert(line);
+                    }
+                }
+            }
+        }
+
+        // Process stdin
+        let stdin = io::stdin();
+        let mut handle = stdin.lock();
+        let mut buffer = String::new();
+        
+        while handle.read_line(&mut buffer)? > 0 {
+            let line = buffer.trim_end().to_string();
+            if should_add_line(&args, &all_lines, &line) {
+                all_lines.insert(line);
+            }
+            buffer.clear();
+        }
+
+        // Sort if requested
+        let mut final_lines: Vec<_> = all_lines.into_iter().collect();
+        if args.sort {
+            final_lines.sort_by(|a, b| natsort::compare(a, b, false));
+        }
+
+        // Output results
+        for line in final_lines {
+            println!("{}", line);
+        }
+
+        return Ok(());
+    }
+
+    // Original functionality for non-unique mode
+    let filepath = args.filepath.as_ref().expect("Destination file is required in non-unique mode");
+    
     // Ensure the directories in the filepath exist before attempting to open the file
-    if let Some(parent) = Path::new(&args.filepath).parent() {
+    if let Some(parent) = Path::new(filepath).parent() {
         fs::create_dir_all(parent)?;
     }
 
@@ -52,7 +118,7 @@ fn main() -> io::Result<()> {
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&args.filepath)?;
+            .open(filepath)?;
         let mut writer = BufWriter::new(file);
 
         for line in lines.iter() {
@@ -65,7 +131,7 @@ fn main() -> io::Result<()> {
         .append(true)
         .write(true)
         .create(true)
-        .open(&args.filepath)?;
+        .open(filepath)?;
     let mut writer = BufWriter::new(file);
 
     for stdin_line in stdin.lock().lines() {
@@ -88,15 +154,15 @@ fn main() -> io::Result<()> {
         let mut sorted_lines: Vec<_> = lines.into_iter().collect();
         sorted_lines.sort_by(|a, b| natsort::compare(a, b, false));
 
-        let soet_file = OpenOptions::new()
+        let sort_file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&args.filepath)?;
-        let mut soet_writer = BufWriter::new(soet_file);
+            .open(filepath)?;
+        let mut sort_writer = BufWriter::new(sort_file);
 
         for line in sorted_lines.iter() {
-            writeln!(soet_writer, "{}", line)?;
+            writeln!(sort_writer, "{}", line)?;
         }
     }
 
@@ -104,7 +170,8 @@ fn main() -> io::Result<()> {
 }
 
 fn load_file(args: &Options) -> Result<IndexSet<String>, io::Error> {
-    match File::open(&args.filepath) {
+    let filepath = args.filepath.as_ref().expect("Destination file is required");
+    match File::open(filepath) {
         Ok(file) => {
             let reader = BufReader::new(file);
             let mut lines = IndexSet::new();
@@ -125,4 +192,19 @@ fn load_file(args: &Options) -> Result<IndexSet<String>, io::Error> {
 fn should_add_line(args: &Options, lines: &IndexSet<String>, line: &str) -> bool {
     let trimmed_line = if args.trim { line.trim() } else { line };
     !trimmed_line.is_empty() && !lines.contains(trimmed_line)
+}
+
+// New helper function to load file content
+fn load_file_content(filepath: &str) -> io::Result<Vec<String>> {
+    match File::open(filepath) {
+        Ok(file) => {
+            let reader = BufReader::new(file);
+            let mut lines = Vec::new();
+            for line in reader.lines() {
+                lines.push(line?);
+            }
+            Ok(lines)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
 }

@@ -3,7 +3,7 @@ name: Create release artifacts
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
 
 permissions:
@@ -15,56 +15,80 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
-        # You can add more, for any target you'd like!
         include:
-          - build: linux
+          # Linux targets
+          - build: linux-amd64
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-          - build: macos
+          - build: linux-arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+          - build: linux-arm
+            os: ubuntu-latest
+            target: armv7-unknown-linux-musleabihf
+          
+          # macOS targets
+          - build: macos-amd64
             os: macos-latest
             target: x86_64-apple-darwin
-          - build: windows
+          - build: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          
+          # Windows targets
+          - build: windows-amd64
             os: windows-latest
             target: x86_64-pc-windows-msvc
+          - build: windows-arm64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Get the release version from the tag
+      - name: Get version from tag
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
-      - name: Install Rust
-        # Or @nightly if you want
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        # Arguments to pass in
         with:
-          # Make Rust compile to our target (defined in the matrix)
           targets: ${{ matrix.target }}
 
-      - name: Build
+      - name: Install cross-compilation tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build binary
         uses: actions-rs/cargo@v1
         with:
           use-cross: true
           command: build
           args: --verbose --release --target ${{ matrix.target }}
 
-      - name: Build archive
+      - name: Prepare release archive
         shell: bash
         run: |
-          # Replace with the name of your binary
           binary_name="anew"
-
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.build }}"
           mkdir "$dirname"
+          
+          # Copy binary
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            mv "target/${{ matrix.target }}/release/$binary_name.exe" "$dirname"
+            mv "target/${{ matrix.target }}/release/$binary_name.exe" "$dirname/"
           else
-            mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+            mv "target/${{ matrix.target }}/release/$binary_name" "$dirname/"
           fi
-
+          
+          # Copy documentation
+          cp README.md LICENSE "$dirname/"
+          
+          # Create archive
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             7z a "$dirname.zip" "$dirname"
             echo "ASSET=$dirname.zip" >> $GITHUB_ENV
@@ -73,8 +97,9 @@ jobs:
             echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
           fi
 
-      - name: Release
+      - name: Upload release artifacts
         uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: |
-            ${{ env.ASSET }}
+          files: ${{ env.ASSET }}
+          generate_release_notes: true
