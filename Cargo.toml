@@ -1,6 +1,6 @@
 [package]
 name = "anew"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["z3r0yu <zeroyu@protonmail.com>"]
 edition = "2021"
 license = "MIT"
