@@ -46,7 +46,7 @@ Here, a file called `things.txt` contains a list of numbers. `newthings.txt` con
 list of numbers, some of which appear in `things.txt` and some of which do not. `anew` is used
 to append the latter to `things.txt`.
 
-Usage 1: Add differences to `things.txt`
+### Usage 1: Add differences to `things.txt`
 ```
 ❯ cat things.txt
 One
@@ -76,7 +76,7 @@ Five
 Four
 ```
 
-Usage 2: Disable terminal output
+### Usage 2: Disable terminal output
 ```
 ❯ cat newthings.txt | anew things.txt -q
 Three
@@ -84,9 +84,14 @@ Five
 Four
 ``` 
 
-Usage 3: Sorting the contents of `things.txt` after adding new differences
+### Usage 3: Sorting the new lines and adding them to `things.txt`
 ```
 ❯ cat newthings.txt | ./anew things.txt -q -s
+```
+
+### Usage 4: De-duplication and sorting of the entire `things.txt` file
+```
+❯ cat newthings.txt | ./anew things.txt -q -r -s
 
 ❯ cat things.txt
 Five
@@ -96,11 +101,9 @@ Three
 Two
 Zero
 ```
-PS: 
-1. anew uses the fastest sorting algorithm, so don't worry about efficiency.
-2. Sort mode automatically de-duplicates, so `-s` and `-r` do not need to be used at the same time.
+**Note**: The `-s` option only sorts the newly added lines (lines that don't exist in the original file), and does not sort the entire file content. If you need to sort the entire file content, please use the `-s` and `-r` options together.
 
-Usage 4: De-duplication of `things.txt` after adding new differences
+### Usage 5: De-duplication of `things.txt` after adding new differences
 ```
 ❯ cat newthings.txt | ./anew things.txt -q -r
 
@@ -113,7 +116,7 @@ Five
 Four
 ```
 
-Usage 5: Merge multiple files and remove duplicates (like `sort -u`)
+### Usage 6: Merge multiple files and remove duplicates (like `sort -u`)
 ```
 ❯ cat things.txt
 One
@@ -130,7 +133,7 @@ Four
 One
 Two
 
-❯ cat *.txt | anew -u 
+❯ cat *.txt | anew save.txt
 Five
 Four
 One
@@ -138,27 +141,27 @@ Three
 Two
 Zero
 ```
-Note: The `-u` option automatically sorts the output and removes duplicates from all input files.
+**Note**: The program automatically handles deduplication when merging multiple input files.
 
 ## Efficiency Comparison
 
 We use two files `newoutput.txt` and `output.txt` of size 10MB as input to the program to compare the difference in speed between tomnomnom's Go implementation, rwese's Rust implementation, and this project's Rust implementation.
 
-This project
+### This project
 ```
 ❯ time cat newoutput.txt | ./anew output.txt -q
 cat newoutput.txt  0.00s user 0.02s system 1% cpu 1.398 total
 ./anew output.txt -q  1.46s user 0.22s system 97% cpu 1.717 total
 ```
 
-anew implemented by rwese
+### anew implemented by rwese
 ```
 ❯ time cat newoutput.txt | ./anew_rwese output.txt -q
 cat newoutput.txt  0.00s user 0.02s system 0% cpu 2:28.38 total
 ./anew output.txt -q  6.95s user 101.08s system 72% cpu 2:29.49 total
 ```
 
-anew implemented by tomnomnom
+### anew implemented by tomnomnom
 ```
 ❯ time cat newoutput.txt | ./anew_go -q output.txt
 cat newoutput.txt  0.00s user 0.02s system 0% cpu 4.797 total

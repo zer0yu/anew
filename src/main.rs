@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::str;
 
@@ -33,178 +33,148 @@ struct Options {
     )]
     dry_run: bool,
 
-    #[arg(
-        short = 'u',
-        long = "unique",
-        help = "Merge all input files, sort and remove duplicates (like 'sort -u')"
-    )]
-    unique_mode: bool,
-
-    #[arg(help = "Destination file", required_unless_present = "unique_mode")]
+    #[arg(help = "Destination file")]
     filepath: Option<String>,
-
-    #[arg(help = "Additional input files for unique mode", num_args = 0..)]
-    additional_files: Vec<String>,
 }
 
 fn main() -> io::Result<()> {
     let args = Options::parse();
 
-    if args.unique_mode {
-        // Handle unique mode (sort -u equivalent)
-        let mut all_lines = IndexSet::new();
-        
-        // Process files if provided
-        if let Some(filepath) = &args.filepath {
+    // 创建集合存储已有行
+    let mut existing_lines = IndexSet::new();
+    let mut added_lines = Vec::new();
+    
+    // 如果提供了目标文件路径，读取目标文件内容
+    if let Some(filepath) = &args.filepath {
+        if Path::new(filepath).exists() {
             if let Ok(lines) = load_file_content(filepath) {
                 for line in lines {
-                    if should_add_line(&args, &all_lines, &line) {
-                        all_lines.insert(line);
-                    }
+                    let processed_line = if args.trim {
+                        line.trim().to_string()
+                    } else {
+                        line
+                    };
+                    
+                    existing_lines.insert(processed_line);
                 }
             }
         }
-
-        // Process additional files
-        for file in &args.additional_files {
-            if let Ok(lines) = load_file_content(file) {
-                for line in lines {
-                    if should_add_line(&args, &all_lines, &line) {
-                        all_lines.insert(line);
-                    }
-                }
-            }
-        }
-
-        // Process stdin
-        let stdin = io::stdin();
-        let mut handle = stdin.lock();
-        let mut buffer = String::new();
+    }
+    
+    // 处理从标准输入读取的内容
+    let stdin = io::stdin();
+    let mut handle = stdin.lock();
+    
+    // 先读取所有内容到一个字符串
+    let mut input = String::new();
+    handle.read_to_string(&mut input)?;
+    
+    // 按照换行符分割输入字符串
+    let lines_iter = input.split('\n');
+    
+    // 处理每一行
+    for line_raw in lines_iter {
+        let line = if args.trim {
+            line_raw.trim().to_string()
+        } else {
+            line_raw.to_string()
+        };
         
-        while handle.read_line(&mut buffer)? > 0 {
-            let line = buffer.trim_end().to_string();
-            if should_add_line(&args, &all_lines, &line) {
-                all_lines.insert(line);
+        // 跳过空行
+        if line.is_empty() {
+            continue;
+        }
+        
+        // 如果这行是新的（不在 existing_lines 中），添加它
+        if !existing_lines.contains(&line) {
+            existing_lines.insert(line.clone());
+            added_lines.push(line);
+        }
+    }
+    
+    // 如果请求排序，则对新添加的行进行排序
+    if args.sort {
+        added_lines.sort_by(|a, b| natsort::compare(a, b, false));
+    }
+    
+    // 如果不是干运行模式，并且有目标文件，写入文件
+    if !args.dry_run && args.filepath.is_some() {
+        let filepath = args.filepath.as_ref().unwrap();
+        
+        // 确保目录存在
+        if let Some(parent) = Path::new(filepath).parent() {
+            fs::create_dir_all(parent)?;
+        }
+        
+        // 根据是否是重写模式，选择写入方式
+        if args.rewrite {
+            // 重写模式：先收集所有行，排序（如果需要），然后写入文件
+            let mut all_lines: Vec<_> = existing_lines.into_iter().collect();
+            
+            if args.sort {
+                all_lines.sort_by(|a, b| natsort::compare(a, b, false));
             }
-            buffer.clear();
+            
+            let file = File::create(filepath)?;
+            let mut writer = BufWriter::new(file);
+            
+            for line in all_lines {
+                writeln!(writer, "{}", line)?;
+            }
+        } else {
+            // 追加模式：只追加新行
+            
+            // 检查文件是否存在且末尾是否缺少换行符
+            let need_newline = if Path::new(filepath).exists() {
+                // 读取文件最后一个字节检查是否为换行符
+                match fs::read(filepath) {
+                    Ok(content) if !content.is_empty() => {
+                        // 检查最后一个字符是否为换行符
+                        content.last().map_or(false, |&byte| byte != b'\n')
+                    },
+                    _ => false
+                }
+            } else {
+                false
+            };
+            
+            let file = OpenOptions::new()
+                .write(true)
+                .append(true)
+                .create(true)
+                .open(filepath)?;
+            let mut writer = BufWriter::new(file);
+            
+            // 如果需要，先添加一个换行符
+            if need_newline {
+                writeln!(writer)?;
+            }
+            
+            for line in &added_lines {
+                writeln!(writer, "{}", line)?;
+            }
         }
-
-        // Sort if requested
-        let mut final_lines: Vec<_> = all_lines.into_iter().collect();
-        if args.sort {
-            final_lines.sort_by(|a, b| natsort::compare(a, b, false));
-        }
-
-        // Output results
-        for line in final_lines {
+    }
+    
+    // 如果不是安静模式，输出新行到标准输出
+    if !args.quiet_mode {
+        for line in added_lines {
             println!("{}", line);
         }
-
-        return Ok(());
     }
-
-    // Original functionality for non-unique mode
-    let filepath = args.filepath.as_ref().expect("Destination file is required in non-unique mode");
     
-    // Ensure the directories in the filepath exist before attempting to open the file
-    if let Some(parent) = Path::new(filepath).parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut lines = load_file(&args)?;
-
-    if args.rewrite && !args.dry_run {
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(filepath)?;
-        let mut writer = BufWriter::new(file);
-
-        for line in lines.iter() {
-            writeln!(writer, "{}", line)?;
-        }
-    }
-
-    let stdin = io::stdin();
-    let file = OpenOptions::new()
-        .append(true)
-        .write(true)
-        .create(true)
-        .open(filepath)?;
-    let mut writer = BufWriter::new(file);
-
-    for stdin_line in stdin.lock().lines() {
-        let stdin_line = stdin_line?;
-
-        if should_add_line(&args, &lines, &stdin_line) {
-            lines.insert(stdin_line.clone());
-
-            if !args.quiet_mode {
-                println!("{}", stdin_line);
-            }
-
-            if !args.sort && !args.dry_run {
-                writeln!(writer, "{}", stdin_line)?;
-            }
-        }
-    }
-
-    if args.sort && !args.dry_run {
-        let mut sorted_lines: Vec<_> = lines.into_iter().collect();
-        sorted_lines.sort_by(|a, b| natsort::compare(a, b, false));
-
-        let sort_file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(filepath)?;
-        let mut sort_writer = BufWriter::new(sort_file);
-
-        for line in sorted_lines.iter() {
-            writeln!(sort_writer, "{}", line)?;
-        }
-    }
-
     Ok(())
 }
 
-fn load_file(args: &Options) -> Result<IndexSet<String>, io::Error> {
-    let filepath = args.filepath.as_ref().expect("Destination file is required");
-    match File::open(filepath) {
-        Ok(file) => {
-            let reader = BufReader::new(file);
-            let mut lines = IndexSet::new();
-
-            for line in reader.lines() {
-                let line = line?;
-                if should_add_line(args, &lines, &line) {
-                    lines.insert(line);
-                }
-            }
-
-            Ok(lines)
-        }
-        Err(_) => Ok(IndexSet::new()), // If the file does not exist, return an empty set of lines
-    }
-}
-
-fn should_add_line(args: &Options, lines: &IndexSet<String>, line: &str) -> bool {
-    let trimmed_line = if args.trim { line.trim() } else { line };
-    !trimmed_line.is_empty() && !lines.contains(trimmed_line)
-}
-
-// New helper function to load file content
+// 辅助函数：加载文件内容
 fn load_file_content(filepath: &str) -> io::Result<Vec<String>> {
-    match File::open(filepath) {
-        Ok(file) => {
-            let reader = BufReader::new(file);
-            let mut lines = Vec::new();
-            for line in reader.lines() {
-                lines.push(line?);
-            }
-            Ok(lines)
-        }
-        Err(_) => Ok(Vec::new()),
+    let file = File::open(filepath)?;
+    let reader = BufReader::new(file);
+    let mut lines = Vec::new();
+    
+    for line in reader.lines() {
+        lines.push(line?);
     }
+    
+    Ok(lines)
 }
